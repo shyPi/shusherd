@@ -3,6 +3,7 @@
 
 #include <math.h>
 
+#include <assert.h>
 #include <fcntl.h>
 
 #include <errno.h>
@@ -26,14 +27,21 @@
 
 #include <sndfile.h>
 
+#include <jack/jack.h>
+#include <jack/ringbuffer.h>
+
 #define DEFAULT_CONFIG "shusherrc"
 #define DEFAULT_DECAY 0.20
 #define DEFAULT_THRESHOLD 40
-#define DEFAULT_INPUT_FILENAME "/dev/stdin"
+#define DEFAULT_INPUT_FILENAME "system:capture_1"
 #define DEFAULT_SHUSHFILE "blah.wav"
 #define DEFAULT_VERBOSITY LOG_DEBUG /* This is BROKEN for anything other than LOG_DEBUG! */
 
+#define DEFAULT_RB_SIZE 16384
+
 #define SAMPLE_TIME 3
+
+int jackplay(const char *filename);
 
 typedef struct {
   int verbosity;
@@ -46,10 +54,19 @@ typedef struct {
   config_t config;
   ebur128_state *ebur128_state;
   pthread_t audio_thread;
+  int can_capture;
+  int can_process;
   int enable_processing;
+  pthread_mutex_t lock;
+  pthread_cond_t data_ready;
+  jack_ringbuffer_t *rb;
+  jack_port_t *port;
+  jack_default_audio_sample_t *in;
+  jack_client_t *client;
 } context_t;
 
 void audio_trigger(context_t *context) {
+  jackplay(context->shush_filename);
   daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
 }
 
@@ -59,6 +76,8 @@ void *audio_loop(void *context_p) {
   time_t t = time(NULL);
   double loudness;
   double points = 0.0;
+
+  pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
   buffer = (double *)malloc(context->snd_fileinfo.samplerate *
                             context->snd_fileinfo.channels *
@@ -70,17 +89,23 @@ void *audio_loop(void *context_p) {
 
   daemon_log(LOG_INFO, "Starting listening...");
 
-  do {
-    sf_count_t nr_frames_read;
+  size_t bytes_per_frame = context->snd_fileinfo.channels * sizeof(jack_default_audio_sample_t);
+  void *framebuf = malloc(bytes_per_frame);
 
-    nr_frames_read = sf_readf_double(
-        context->sndfile,
-        buffer,
-        (sf_count_t)context->ebur128_state->samplerate);
+  pthread_mutex_lock(&context->lock);
 
-    ebur128_add_frames_double(context->ebur128_state,
-        buffer,
-        (size_t)nr_frames_read);
+  int trigger = 0;
+  while (context->enable_processing) {
+  // XXX: not sure hwat this is for?
+  while (context->can_capture &&
+         jack_ringbuffer_read_space(context->rb) > bytes_per_frame) {
+
+    jack_ringbuffer_read(context->rb, framebuf, bytes_per_frame);
+
+    // XXX: do multiple bytes at a time
+    ebur128_add_frames_float(context->ebur128_state,
+        framebuf,
+        1);
 
     if ((time(NULL) - t) > SAMPLE_TIME) {
       t = time(NULL);
@@ -88,38 +113,89 @@ void *audio_loop(void *context_p) {
 
       points += 100 - fabs(loudness);
 
-      daemon_log(LOG_INFO, "Points: %f (%d)", points, context->points_threshold);
+      daemon_log(LOG_INFO, "Points: %f (%d) (%f)", points, context->points_threshold, loudness);
 
       if (points > context->points_threshold) {
-        audio_trigger(context);
-        points = 0;
+        trigger = 1;
       } else {
         points *= context->decay;
       }
     }
-  } while (context->enable_processing);
+
+    if (trigger) {
+        context->can_process = 0;
+        audio_trigger(context);
+        points = 0;
+        trigger = 0;
+        context->can_process = 1;
+    }
+
+  }
+
+    pthread_cond_wait(&context->data_ready, &context->lock);
+
+  }
 
   daemon_log(LOG_INFO, "Stopped listening...");
 
+  pthread_mutex_unlock(&context->lock);
+
   free(buffer);
-  pthread_exit((void*) 0);
+  free(framebuf);
+  return 0;
+}
+
+int process(jack_nframes_t nframes, void *context_p)
+{
+  context_t *context = (context_t *)context_p;
+
+  int chn;
+  size_t i;
+
+  if (!context->can_process || !context->can_capture)
+    return 0;
+
+  context->in = jack_port_get_buffer(context->port, nframes);
+
+  /* Sndfile requires interleaved data.  It is simpler here to
+   * just queue interleaved samples to a single ringbuffer. */
+  for (i = 0; i < nframes; i++) {
+    if (jack_ringbuffer_write (context->rb, (void *) (context->in+i),
+          sizeof(jack_default_audio_sample_t))
+        < sizeof(jack_default_audio_sample_t)) {
+        //overruns++;
+    }
+  }
+
+  if (pthread_mutex_trylock (&context->lock) == 0) {
+    pthread_cond_signal(&context->data_ready);
+    pthread_mutex_unlock(&context->lock);
+  }
+
+  return 0;
+}
+
+void jack_shutdown(void *arg) {
+  fprintf(stderr, "really this hsould go elsewhere\n");
+  abort();
 }
 
 int audio_init(context_t *context) {
   int rc = 0;
+
+  pthread_mutex_init(&context->lock, NULL);
+  pthread_cond_init(&context->data_ready, NULL);
 
   memset(&context->snd_fileinfo, '\0', sizeof(context->snd_fileinfo));
   daemon_log(LOG_INFO, "Opening %s", context->input_filename);
   //int fd = open(context->input_filename, O_RDONLY);
   //context->sndfile = sf_open_fd(fd, SFM_READ, &context->snd_fileinfo, 1);
 
-  context->sndfile = sf_open(context->input_filename, SFM_READ, &context->snd_fileinfo);
-  if (!context->sndfile) {
-    daemon_log(LOG_ERR, "Unable to open `%s`: %s",
-                        context->input_filename,
-                        sf_strerror(context->sndfile));
-    goto done;
-  }
+  context->client = jack_client_open("shusher", JackNullOption, NULL);
+  assert(context->client);
+
+  context->snd_fileinfo.samplerate = jack_get_sample_rate(context->client);
+  context->snd_fileinfo.channels = 1;
 
   context->ebur128_state = ebur128_init((unsigned)context->snd_fileinfo.channels,
                                         (unsigned)context->snd_fileinfo.samplerate,
@@ -129,6 +205,33 @@ int audio_init(context_t *context) {
     goto cleanup_sndfile;
   }
 
+
+  jack_set_process_callback(context->client, process, context);
+  jack_on_shutdown(context->client, jack_shutdown, context);
+
+  jack_activate(context->client);
+
+  context->port = (jack_port_t *)malloc(sizeof(jack_port_t *));
+  context->in = (jack_default_audio_sample_t *)malloc(sizeof(jack_default_audio_sample_t *));
+  context->rb = jack_ringbuffer_create(sizeof(jack_default_audio_sample_t) * DEFAULT_RB_SIZE);
+
+  memset(context->in, 0, sizeof(*context->in));
+  memset(context->rb->buf, 0, context->rb->size);
+
+  char name[64];
+  sprintf(name, "input%d", 1);
+
+  context->port = jack_port_register(context->client, name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
+  assert(context->port);
+
+  rc  = jack_connect(context->client, context->input_filename, jack_port_name(context->port));
+  fprintf(stderr, "tried to connect %s to %s\n", context->input_filename, jack_port_name(context->port));
+  if (rc != 0) {
+    fprintf(stderr, "rc was %d\n", rc);
+  }
+  //assert(rc == 0);
+  context->can_process = 1;
+  context->can_capture = 1;
   context->enable_processing = 1;
 
   rc = pthread_create(&context->audio_thread, NULL, audio_loop, (void *)context);
@@ -142,7 +245,7 @@ int audio_init(context_t *context) {
 cleanup_ebur128_state:
   ebur128_destroy(&context->ebur128_state);
 cleanup_sndfile:
-  sf_close(context->sndfile);
+  //sf_close(context->sndfile);
 done:
   return rc;
 }
@@ -152,6 +255,8 @@ void audio_destroy(context_t *context) {
   pthread_join(context->audio_thread, NULL);
   ebur128_destroy(&context->ebur128_state);
   sf_close(context->sndfile);
+  pthread_mutex_destroy(&context->lock);
+  pthread_cond_destroy(&context->data_ready);
 }
 
 int settings_init(context_t *context) {
