@@ -162,53 +162,6 @@ jack_shutdown (void *arg)
 {	(void) arg ;
 } /* jack_shutdown */
 
-static inline void
-print_time (jack_nframes_t pos, int jack_sr)
-{	float sec = pos / (1.0 * jack_sr) ;
-	int min = sec / 60.0 ;
-	fprintf (stderr, "%02d:%05.2f", min, fmod (sec, 60.0)) ;
-} /* print_time */
-
-static inline void
-print_status (const thread_info_t * info)
-{
-	if (info->loop_count == 0)
-		fprintf (stderr, "\r-> %6d     ", info->current_loop) ;
-	else if (info->loop_count > 1)
-		fprintf (stderr, "\r-> %6d/%d     ", info->current_loop, info->loop_count) ;
-	else
-		fprintf (stderr, "\r->     ") ;
-
-	print_time (info->pos, info->samplerate) ;
-	fflush (stdout) ;
-} /* print_status */
-
-static void
-usage_exit (char * argv0, int status)
-{
-	printf ("\n"
-		"Usage : %s [options] <input sound file>\n"
-		"\n"
-		"  Where [options] is one of:\n"
-		"\n"
-		" -w   --wait[=<port>]    : Wait for input before starting playback; optionally auto-connect to <port> using Jack.\n"
-		" -l   --loop=<count>        : Loop the file <count> times (0 for infinite).\n"
-		" -h   --help                : Show this help message.\n"
-		"\n"
-		"Using %s.\n"
-		"\n",
-		basename (argv0), sf_version_string ()) ;
-	exit (status) ;
-} /* usage_exit */
-
-static struct option const long_options [] =
-{
-	{ "wait", optional_argument, NULL, 'w' } ,
-	{ "loop", required_argument, NULL, 'l' } ,
-	{ "help", no_argument, NULL, 'h' } ,
-	{ NULL, 0, NULL, 0 }
-} ;
-
 int
 jackplay (const char *filename)
 {	pthread_t thread_id ;
@@ -220,7 +173,6 @@ jackplay (const char *filename)
 	char * auto_connect_str = "system:playback_%d" ;
 	bool wait_before_play = false ;
 	int i, jack_sr, loop_count = 1 ;
-	int c ;
 
 	/* Create jack client */
 	if ((client = jack_client_open ("jackplay", JackNullOption | JackNoStartServer, &status)) == 0)

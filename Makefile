@@ -1,4 +1,4 @@
-CFLAGS=-c -Wall `pkg-config --cflags sndfile libdaemon libconfig` -I/usr/local/Cellar/libebur128/1.0.2/include -g -ggdb
+CFLAGS=-c -Wall `pkg-config --cflags sndfile libdaemon libconfig` -I/usr/local/Cellar/libebur128/1.0.2/include -g -ggdb -I/usr/local/include
 LDFLAGS=`pkg-config --libs sndfile libdaemon libconfig` -ljack -L/usr/local/Cellar/libebur128/1.0.2/lib -lebur128
 SOURCES=shusherd.c jackplay_include.c
 OBJECTS=$(SOURCES:.c=.o)

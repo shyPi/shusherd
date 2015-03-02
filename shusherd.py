@@ -29,13 +29,15 @@ class Shusher(object):
 
     def run(self):
         config = self.get_config()
+        if not config:
+            raise Exception('Could not get initial config')
         self.write_config(config)
         while True:
             child_process = Popen([SHUSHER_HELPER])
             reload = False
             while not reload:
                 new_cfg = self.get_config()
-                if config != new_cfg:
+                if new_cfg and (config != new_cfg):
                     config = new_cfg
                     self.write_config(config)
                     child_process.terminate()
@@ -46,11 +48,14 @@ class Shusher(object):
             print(child_process.returncode)
 
     def get_config(self):
-        r = requests.post('http://{}/config'.format(self.host), json={
-            "mac": self.mac_addr
-        })
-        if r.status_code() == 200:
+        r = requests.get('http://{}/shushers/?mac_address={}'.format(
+            self.host,
+            self.mac_addr))
+        if r.status_code == 200:
             return r.json()
+        else:
+            print("Unable to get config: " + str(r))
+            return None
 
         #print(json.load(open("config.json")))
         #return json.load(open("config.json"))
@@ -59,10 +64,15 @@ class Shusher(object):
         print("writing a config", cfg)
         tmpcfg = SHUSHER_CONFIG + '.tmp'
         with open(tmpcfg, 'w') as f:
-            f.write('decay = {:.2}\n'.format(cfg['decay']))
-            f.write('threshold = {}\n'.format(cfg['threshold']))
-            f.write('verbosity = {}\n'.format(cfg['verbosity']))
-            f.write('input_file = "{}"\n'.format(cfg['input_file']))
+            if 'decay' in cfg:
+                f.write('decay = {:.2}\n'.format(cfg['decay']))
+            if 'sound_threshold' in cfg:
+                f.write('threshold = {}\n'.format(cfg['sound_threshold']))
+            if 'shout_msg' in cfg:
+                f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
+
+            #f.write('verbosity = {}\n'.format(cfg['verbosity']))
+            #f.write('input_file = "{}"\n'.format(cfg['input_file']))
         os.rename(tmpcfg, SHUSHER_CONFIG)
 
 

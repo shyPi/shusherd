@@ -28,6 +28,7 @@
 #include <sndfile.h>
 
 #include <jack/jack.h>
+#include <jack/types.h>
 #include <jack/ringbuffer.h>
 
 #define DEFAULT_CONFIG "shusherrc"
@@ -149,7 +150,6 @@ int process(jack_nframes_t nframes, void *context_p)
 {
   context_t *context = (context_t *)context_p;
 
-  int chn;
   size_t i;
 
   if (!context->can_process || !context->can_capture)
@@ -211,8 +211,8 @@ int audio_init(context_t *context) {
 
   jack_activate(context->client);
 
-  context->port = (jack_port_t *)malloc(sizeof(jack_port_t *));
-  context->in = (jack_default_audio_sample_t *)malloc(sizeof(jack_default_audio_sample_t *));
+  //context->port = (jack_port_t *)malloc(sizeof(jack_port_t*));
+  context->in = (jack_default_audio_sample_t *)malloc(sizeof(jack_default_audio_sample_t));
   context->rb = jack_ringbuffer_create(sizeof(jack_default_audio_sample_t) * DEFAULT_RB_SIZE);
 
   memset(context->in, 0, sizeof(*context->in));
@@ -225,7 +225,6 @@ int audio_init(context_t *context) {
   assert(context->port);
 
   rc  = jack_connect(context->client, context->input_filename, jack_port_name(context->port));
-  fprintf(stderr, "tried to connect %s to %s\n", context->input_filename, jack_port_name(context->port));
   if (rc != 0) {
     fprintf(stderr, "rc was %d\n", rc);
   }
@@ -246,7 +245,6 @@ cleanup_ebur128_state:
   ebur128_destroy(&context->ebur128_state);
 cleanup_sndfile:
   //sf_close(context->sndfile);
-done:
   return rc;
 }
 
