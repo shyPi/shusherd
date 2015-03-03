@@ -73,7 +73,7 @@ void audio_trigger(context_t *context) {
 
   static const pa_sample_spec ss = {
     .format = PA_SAMPLE_S16LE,
-    .rate = 11025,
+    .rate = 44100,
     .channels = 1
   };
 
@@ -129,8 +129,6 @@ void *audio_loop(void *context_p) {
   daemon_log(LOG_INFO, "Starting listening...");
 
   const short buf[BUFSIZE/2];
-  memset(&buf, 'A', sizeof(buf));
-
 
   int bytes = 0;
   int trigger = 0;
@@ -167,7 +165,6 @@ void *audio_loop(void *context_p) {
   }
   }
 
-
   daemon_log(LOG_INFO, "Stopped listening...");
 
 
@@ -190,7 +187,7 @@ int audio_init(context_t *context) {
   //int fd = open(context->input_filename, O_RDONLY);
   //context->sndfile = sf_open_fd(fd, SFM_READ, &context->snd_fileinfo, 1);
 
-  context->pa = pa_simple_new(NULL, "shusherd", PA_STREAM_RECORD, NULL, "record", &ss, NULL, NULL, &error);
+  context->pa = pa_simple_new(NULL, "shusherd", PA_STREAM_RECORD, context->input_filename, "record", &ss, NULL, NULL, &error);
   if (!context->pa) {
     daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
     assert(0);
@@ -259,7 +256,8 @@ int settings_init(context_t *context) {
   context->decay = DEFAULT_DECAY;
   context->points_threshold = DEFAULT_THRESHOLD;
   context->shush_filename = DEFAULT_SHUSHFILE;
-  context->input_filename = DEFAULT_INPUT_FILENAME;
+  //context->input_filename = DEFAULT_INPUT_FILENAME;
+  context->input_filename = NULL;
   context->verbosity = DEFAULT_VERBOSITY;
 
   config_lookup_float(&context->config, "decay", &context->decay);

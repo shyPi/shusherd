@@ -13,6 +13,7 @@ import requests
 SHUSHER_HELPER = './shusherd'
 SHUSHER_CONFIG = 'shusherrc'
 
+AUDIO = "_x_________p__"
 child_process = None
 
 
@@ -70,6 +71,7 @@ class Shusher(object):
                 f.write('threshold = {}\n'.format(cfg['sound_threshold']))
             if 'shout_msg' in cfg:
                 f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
+            f.write('input_file = "{}"\n'.format(AUDIO))
 
             #f.write('verbosity = {}\n'.format(cfg['verbosity']))
             #f.write('input_file = "{}"\n'.format(cfg['input_file']))
