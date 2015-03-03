@@ -37,7 +37,8 @@ typedef struct {
   int points_threshold;
   double decay;
   const char *shush_filename;
-  const char *input_filename;
+  const char *input_device;
+  const char *output_device;
   config_t config;
   ebur128_state *ebur128_state;
   pthread_t audio_thread;
@@ -66,7 +67,7 @@ void audio_trigger(context_t *context) {
   if (!(s = pa_simple_new(NULL,
                           "shusherd",
                           PA_STREAM_PLAYBACK,
-                          NULL,
+                          context->output_device,
                           "playback",
                           &ss,
                           NULL,
@@ -170,12 +171,12 @@ int audio_init(context_t *context) {
   };
   int error;
 
-  daemon_log(LOG_INFO, "Opening %s", context->input_filename ?: "default source");
+  daemon_log(LOG_INFO, "Opening %s", context->input_device ?: "default source");
 
   context->pa = pa_simple_new(NULL,
                               "shusherd",
                               PA_STREAM_RECORD,
-                              context->input_filename,
+                              context->input_device,
                               "record",
                               &ss,
                               NULL,
@@ -224,13 +225,15 @@ int settings_init(context_t *context) {
 
   context->decay = DEFAULT_DECAY;
   context->points_threshold = DEFAULT_THRESHOLD;
-  context->input_filename = NULL;
+  context->input_device = NULL;
+  context->output_device = NULL;
   context->shush_filename = DEFAULT_SHUSHFILE;
   context->verbosity = DEFAULT_VERBOSITY;
 
   config_lookup_float(&context->config, "decay", &context->decay);
   config_lookup_int(&context->config, "threshold", &context->points_threshold);
-  config_lookup_string(&context->config, "input_file", &context->input_filename);
+  config_lookup_string(&context->config, "input_device", &context->input_device);
+  config_lookup_string(&context->config, "output_device", &context->output_device);
   config_lookup_string(&context->config, "shush_file", &context->shush_filename);
   config_lookup_bool(&context->config, "verbosity", &context->verbosity);
 
@@ -238,10 +241,11 @@ int settings_init(context_t *context) {
 
   daemon_log(LOG_DEBUG, "Settings:");
   daemon_log(LOG_DEBUG, "\t%.10s %.01f", "decay", context->decay);
-  daemon_log(LOG_DEBUG, "\t%.10s %d", "threshold", context->points_threshold);
-  daemon_log(LOG_DEBUG, "\t%.10s %s", "input_file", context->input_filename);
-  daemon_log(LOG_DEBUG, "\t%.10s %s", "shush_file", context->shush_filename);
-  daemon_log(LOG_DEBUG, "\t%.10s %d", "verbosity", context->verbosity);
+  daemon_log(LOG_DEBUG, "\t%.20s %d", "threshold", context->points_threshold);
+  daemon_log(LOG_DEBUG, "\t%.20s %s", "input_device", context->input_device);
+  daemon_log(LOG_DEBUG, "\t%.20s %s", "output_device", context->output_device);
+  daemon_log(LOG_DEBUG, "\t%.20s %s", "shush_file", context->shush_filename);
+  daemon_log(LOG_DEBUG, "\t%.20s %d", "verbosity", context->verbosity);
 
   return 0;
 }

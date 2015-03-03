@@ -7,15 +7,12 @@ import atexit
 import json
 import requests
 
-
 # XXX: always kill process
 
 SHUSHER_HELPER = './shusherd'
 SHUSHER_CONFIG = 'shusherrc'
 
-AUDIO = "_x_________p__"
 child_process = None
-
 
 @atexit.register
 def cleanup_child():
@@ -27,6 +24,8 @@ class Shusher(object):
     def __init__(self, args):
         self.host = args.host
         self.mac_addr = args.mac_addr
+        self.input_device = args.input_device
+        self.output_device = args.output_device
 
     def run(self):
         config = self.get_config()
@@ -71,7 +70,10 @@ class Shusher(object):
                 f.write('threshold = {}\n'.format(cfg['sound_threshold']))
             if 'shout_msg' in cfg:
                 f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
-            f.write('input_file = "{}"\n'.format(AUDIO))
+            if self.input_device:
+                f.write('input_device = "{}"\n'.format(self.input_device))
+            if self.output_device:
+                f.write('output_device = "{}"\n'.format(self.output_device))
 
             #f.write('verbosity = {}\n'.format(cfg['verbosity']))
             #f.write('input_file = "{}"\n'.format(cfg['input_file']))
@@ -85,6 +87,8 @@ def main(argv):
     parser.add_argument('-H', '--host', required=True)
     parser.add_argument('-M', '--mac-addr', required=True)
     parser.add_argument('-f', '--foreground', action='store_true')
+    parser.add_argument('-I', '--input-device')
+    parser.add_argument('-O', '--output-device')
 
     args = parser.parse_args(argv[1:])
 
