@@ -1,6 +1,10 @@
 #include <signal.h>
 #include <stdlib.h>
 
+#include <unistd.h>
+#include <sys/uio.h>
+#include <sys/types.h>
+
 #include <math.h>
 
 #include <assert.h>
@@ -27,9 +31,11 @@
 
 #include <sndfile.h>
 
-#include <jack/jack.h>
-#include <jack/types.h>
-#include <jack/ringbuffer.h>
+#include <pulse/simple.h>
+#include <pulse/error.h>
+
+#define BUFSIZE 1024
+
 
 #define DEFAULT_CONFIG "shusherrc"
 #define DEFAULT_DECAY 0.20
@@ -42,7 +48,6 @@
 
 #define SAMPLE_TIME 3
 
-int jackplay(const char *filename);
 
 typedef struct {
   int verbosity;
@@ -60,15 +65,55 @@ typedef struct {
   int enable_processing;
   pthread_mutex_t lock;
   pthread_cond_t data_ready;
-  jack_ringbuffer_t *rb;
-  jack_port_t *port;
-  jack_default_audio_sample_t *in;
-  jack_client_t *client;
+  pa_simple *pa;
 } context_t;
 
 void audio_trigger(context_t *context) {
-  jackplay(context->shush_filename);
   daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
+
+  static const pa_sample_spec ss = {
+    .format = PA_SAMPLE_S16LE,
+    .rate = 11025,
+    .channels = 1
+  };
+
+  pa_simple *s = NULL;
+  int ret = 1;
+  int error;
+  int input_fd = open(context->shush_filename, O_RDONLY);
+  if (input_fd < 0) {
+    fprintf(stderr, "Error reading %s: %s\n", context->shush_filename, strerror(errno));
+    return;
+  }
+  if (!(s = pa_simple_new(NULL, "shusherd", PA_STREAM_PLAYBACK, NULL, "playback", &ss, NULL, NULL, &error))) {
+        fprintf(stderr, __FILE__": pa_simple_new() failed: %s\n", pa_strerror(error));
+        goto finish;
+    }
+    for (;;) {
+        uint8_t buf[BUFSIZE];
+        ssize_t r;
+        if ((r = read(input_fd, buf, sizeof(buf))) <= 0) {
+            if (r == 0) /* EOF */
+                break;
+            fprintf(stderr, __FILE__": read() failed: %s\n", strerror(errno));
+            goto finish;
+        }
+        /* ... and play it */
+        if (pa_simple_write(s, buf, (size_t) r, &error) < 0) {
+            fprintf(stderr, __FILE__": pa_simple_write() failed: %s\n", pa_strerror(error));
+            goto finish;
+        }
+    }
+    /* Make sure that every single sample was played */
+    if (pa_simple_drain(s, &error) < 0) {
+        fprintf(stderr, __FILE__": pa_simple_drain() failed: %s\n", pa_strerror(error));
+        goto finish;
+    }
+    ret = 0;
+finish:
+  close(input_fd);
+    if (s)
+        pa_simple_free(s);
 }
 
 void *audio_loop(void *context_p) {
@@ -77,125 +122,83 @@ void *audio_loop(void *context_p) {
   time_t t = time(NULL);
   double loudness;
   double points = 0.0;
+  int error;
 
   pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 
-  buffer = (double *)malloc(context->snd_fileinfo.samplerate *
-                            context->snd_fileinfo.channels *
-                            sizeof(double));
-
-  if (!buffer) {
-    return (void *)1;
-  }
-
   daemon_log(LOG_INFO, "Starting listening...");
 
-  size_t bytes_per_frame = context->snd_fileinfo.channels * sizeof(jack_default_audio_sample_t);
-  void *framebuf = malloc(bytes_per_frame);
+  const short buf[BUFSIZE/2];
+  memset(&buf, 'A', sizeof(buf));
 
-  pthread_mutex_lock(&context->lock);
 
+  int bytes = 0;
   int trigger = 0;
+
   while (context->enable_processing) {
-  // XXX: not sure hwat this is for?
-  while (context->can_capture &&
-         jack_ringbuffer_read_space(context->rb) > bytes_per_frame) {
-
-    jack_ringbuffer_read(context->rb, framebuf, bytes_per_frame);
-
-    // XXX: do multiple bytes at a time
-    ebur128_add_frames_float(context->ebur128_state,
-        framebuf,
-        1);
-
-    if ((time(NULL) - t) > SAMPLE_TIME) {
-      t = time(NULL);
-      ebur128_loudness_shortterm(context->ebur128_state, &loudness);
-
-      points += 100 - fabs(loudness);
-
-      daemon_log(LOG_INFO, "Points: %f (%d) (%f)", points, context->points_threshold, loudness);
-
-      if (points > context->points_threshold) {
-        trigger = 1;
-      } else {
-        points *= context->decay;
-      }
+    if ((bytes = pa_simple_read(context->pa, (void *)buf, sizeof(buf), &error)) < 0) {
+      daemon_log(LOG_ERR, "pa_simple_read failed: %s", pa_strerror(error));
+      assert(0);
     }
 
-    if (trigger) {
-        context->can_process = 0;
-        audio_trigger(context);
-        points = 0;
-        trigger = 0;
-        context->can_process = 1;
+  ebur128_add_frames_short(context->ebur128_state, buf, sizeof(buf)/2);
+
+  if ((time(NULL) - t) > SAMPLE_TIME) {
+    t = time(NULL);
+    ebur128_loudness_shortterm(context->ebur128_state, &loudness);
+
+    points += 100 - fabs(loudness);
+
+    daemon_log(LOG_INFO, "Points: %f (%d) (%f)", points, context->points_threshold, loudness);
+
+    if (points > context->points_threshold) {
+      trigger = 1;
+    } else {
+      points *= context->decay;
     }
-
   }
 
-    pthread_cond_wait(&context->data_ready, &context->lock);
-
+  if (trigger) {
+    context->can_process = 0;
+    audio_trigger(context);
+    points = 0;
+    trigger = 0;
+    context->can_process = 1;
   }
+  }
+
 
   daemon_log(LOG_INFO, "Stopped listening...");
 
-  pthread_mutex_unlock(&context->lock);
 
-  free(buffer);
-  free(framebuf);
+ // free(buffer);
+  //free(framebuf);
   return 0;
-}
-
-int process(jack_nframes_t nframes, void *context_p)
-{
-  context_t *context = (context_t *)context_p;
-
-  size_t i;
-
-  if (!context->can_process || !context->can_capture)
-    return 0;
-
-  context->in = jack_port_get_buffer(context->port, nframes);
-
-  /* Sndfile requires interleaved data.  It is simpler here to
-   * just queue interleaved samples to a single ringbuffer. */
-  for (i = 0; i < nframes; i++) {
-    if (jack_ringbuffer_write (context->rb, (void *) (context->in+i),
-          sizeof(jack_default_audio_sample_t))
-        < sizeof(jack_default_audio_sample_t)) {
-        //overruns++;
-    }
-  }
-
-  if (pthread_mutex_trylock (&context->lock) == 0) {
-    pthread_cond_signal(&context->data_ready);
-    pthread_mutex_unlock(&context->lock);
-  }
-
-  return 0;
-}
-
-void jack_shutdown(void *arg) {
-  fprintf(stderr, "really this hsould go elsewhere\n");
-  abort();
 }
 
 int audio_init(context_t *context) {
   int rc = 0;
-
-  pthread_mutex_init(&context->lock, NULL);
-  pthread_cond_init(&context->data_ready, NULL);
+  static const pa_sample_spec ss = {
+    .format = PA_SAMPLE_S16LE,
+    .rate = 44100,
+    .channels = 2
+  };
+  int error;
 
   memset(&context->snd_fileinfo, '\0', sizeof(context->snd_fileinfo));
   daemon_log(LOG_INFO, "Opening %s", context->input_filename);
   //int fd = open(context->input_filename, O_RDONLY);
   //context->sndfile = sf_open_fd(fd, SFM_READ, &context->snd_fileinfo, 1);
 
-  context->client = jack_client_open("shusher", JackNullOption, NULL);
-  assert(context->client);
-
-  context->snd_fileinfo.samplerate = jack_get_sample_rate(context->client);
+  context->pa = pa_simple_new(NULL, "shusherd", PA_STREAM_RECORD, NULL, "record", &ss, NULL, NULL, &error);
+  if (!context->pa) {
+    daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
+    assert(0);
+  }
+  context->snd_fileinfo.samplerate = 44100;
   context->snd_fileinfo.channels = 1;
+  //context->snd_fileinfo.samplerate = jack_get_sample_rate(context->client);
+  //context->snd_fileinfo.channels = 1;
 
   context->ebur128_state = ebur128_init((unsigned)context->snd_fileinfo.channels,
                                         (unsigned)context->snd_fileinfo.samplerate,
@@ -206,34 +209,19 @@ int audio_init(context_t *context) {
   }
 
 
-  jack_set_process_callback(context->client, process, context);
-  jack_on_shutdown(context->client, jack_shutdown, context);
-
-  jack_activate(context->client);
-
-  //context->port = (jack_port_t *)malloc(sizeof(jack_port_t*));
-  context->in = (jack_default_audio_sample_t *)malloc(sizeof(jack_default_audio_sample_t));
-  context->rb = jack_ringbuffer_create(sizeof(jack_default_audio_sample_t) * DEFAULT_RB_SIZE);
-
-  memset(context->in, 0, sizeof(*context->in));
-  memset(context->rb->buf, 0, context->rb->size);
+  //memset(context->in, 0, sizeof(*context->in));
+  //memset(context->rb->buf, 0, context->rb->size);
 
   char name[64];
   sprintf(name, "input%d", 1);
 
-  context->port = jack_port_register(context->client, name, JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
-  assert(context->port);
-
-  rc  = jack_connect(context->client, context->input_filename, jack_port_name(context->port));
-  if (rc != 0) {
-    fprintf(stderr, "rc was %d\n", rc);
-  }
   //assert(rc == 0);
   context->can_process = 1;
   context->can_capture = 1;
   context->enable_processing = 1;
 
-  rc = pthread_create(&context->audio_thread, NULL, audio_loop, (void *)context);
+  audio_loop(context);
+  //rc = pthread_create(&context->audio_thread, NULL, audio_loop, (void *)context);
   if (rc) {
     daemon_log(LOG_ERR, "Unable to create audio thread: %d", rc);
     goto cleanup_ebur128_state;
