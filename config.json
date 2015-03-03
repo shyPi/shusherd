@@ -1,0 +1,6 @@
+{
+  "decay": 0.22,
+  "sound_threshold": 90,
+  "shout_msg": "dwarf-laugh",
+  "poll_interval": 1
+}

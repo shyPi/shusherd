@@ -14,6 +14,7 @@ SHUSHER_CONFIG = 'shusherrc'
 
 child_process = None
 
+
 @atexit.register
 def cleanup_child():
     if child_process:
@@ -26,8 +27,10 @@ class Shusher(object):
         self.mac_addr = args.mac_addr
         self.input_device = args.input_device
         self.output_device = args.output_device
+        self.config = args.config
 
     def run(self):
+        global child_process
         config = self.get_config()
         if not config:
             raise Exception('Could not get initial config')
@@ -44,21 +47,20 @@ class Shusher(object):
                     reload = True
                 else:
                     time.sleep(new_cfg['poll_interval'])
-            print("return code", child_process.returncode)
             print(child_process.returncode)
 
     def get_config(self):
-        r = requests.get('http://{}/shushers/?mac_address={}'.format(
-            self.host,
-            self.mac_addr))
-        if r.status_code == 200:
-            return r.json()
+        if self.host:
+            r = requests.get('http://{}/shushers/?mac_address={}'.format(
+                self.host,
+                self.mac_addr))
+            if r.status_code == 200:
+                return r.json()
+            else:
+                print("Unable to get config: " + str(r))
+                return None
         else:
-            print("Unable to get config: " + str(r))
-            return None
-
-        #print(json.load(open("config.json")))
-        #return json.load(open("config.json"))
+            return json.load(open(self.config))
 
     def write_config(self, cfg):
         print("writing a config", cfg)
@@ -75,8 +77,6 @@ class Shusher(object):
             if self.output_device:
                 f.write('output_device = "{}"\n'.format(self.output_device))
 
-            #f.write('verbosity = {}\n'.format(cfg['verbosity']))
-            #f.write('input_file = "{}"\n'.format(cfg['input_file']))
         os.rename(tmpcfg, SHUSHER_CONFIG)
 
 
@@ -84,7 +84,8 @@ def main(argv):
     parser = argparse.ArgumentParser(
         prog='shusherd',
         description='Shusher daemon')
-    parser.add_argument('-H', '--host', required=True)
+    parser.add_argument('-H', '--host')
+    parser.add_argument('-C', '--config', default='config.json')
     parser.add_argument('-M', '--mac-addr', required=True)
     parser.add_argument('-f', '--foreground', action='store_true')
     parser.add_argument('-I', '--input-device')
