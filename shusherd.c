@@ -50,7 +50,6 @@ typedef struct {
 void audio_trigger(context_t *context) {
   daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
 
-  int ret = 1;
   int error;
   int input_fd = open(context->shush_filename, O_RDONLY);
   if (input_fd < 0) {
@@ -82,7 +81,6 @@ void audio_trigger(context_t *context) {
     goto finish;
   }
 
-  ret = 0;
 finish:
   if (input_fd > 0)
     close(input_fd);

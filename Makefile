@@ -1,5 +1,5 @@
-CFLAGS=-c -Wall `pkg-config --cflags sndfile libdaemon libconfig` -I/usr/local/Cellar/libebur128/1.0.2/include -g -ggdb -I/usr/local/include
-LDFLAGS=`pkg-config --libs sndfile libdaemon libconfig libpulse-simple`  -L/usr/local/Cellar/libebur128/1.0.2/lib -lebur128
+CFLAGS=-c -Wall `pkg-config --cflags libdaemon libconfig` -I/usr/local/Cellar/libebur128/1.0.2/include -g -ggdb -I/usr/local/include
+LDFLAGS=`pkg-config --libs libdaemon libconfig libpulse-simple`  -L/usr/local/Cellar/libebur128/1.0.2/lib -lebur128 -lpthread
 SOURCES=shusherd.c
 OBJECTS=$(SOURCES:.c=.o)
 EXECUTABLE=shusherd
@@ -7,7 +7,7 @@ EXECUTABLE=shusherd
 all: $(SOURCES) $(EXECUTABLE)
 
 $(EXECUTABLE): $(OBJECTS)
-	$(CC) $(LDFLAGS) $(OBJECTS) -o $@
+	$(CC) $(OBJECTS) -o $@ $(LDFLAGS)
 
 .c.o:
 	$(CC) $(CFLAGS) $< -o $@
