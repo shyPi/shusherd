@@ -14,6 +14,7 @@ SHUSHER_CONFIG = 'shusherrc'
 
 DEFAULT_MIN_THRESHOLD = 40
 DEFAULT_MAX_THRESHOLD = 120
+DEFAULT_COOLDOWN = 60
 
 child_process = None
 
@@ -86,6 +87,8 @@ class Shusher(object):
                 f.write('input_device = "{}"\n'.format(self.input_device))
             if self.output_device:
                 f.write('output_device = "{}"\n'.format(self.output_device))
+            if 'cooldown' in cfg:
+                f.write('cooldown = {}\n'.format(cfg['cooldown']))
 
         os.rename(tmpcfg, SHUSHER_CONFIG)
 

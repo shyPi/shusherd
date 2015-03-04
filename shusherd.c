@@ -28,6 +28,7 @@
 #define DEFAULT_CONFIG "shusherrc"
 #define DEFAULT_DECAY 0.20
 #define DEFAULT_THRESHOLD 40
+#define DEFAULT_COOLDOWN 60
 #define DEFAULT_SHUSHFILE "blah.wav"
 #define DEFAULT_VERBOSITY LOG_DEBUG /* This is BROKEN for anything other than LOG_DEBUG! */
 
@@ -36,6 +37,7 @@
 typedef struct {
   int verbosity;
   int points_threshold;
+  int cooldown;
   double decay;
   const char *shush_filename;
   const char *input_device;
@@ -102,11 +104,16 @@ void *audio_loop(void *context_p) {
 
   int bytes = 0;
   int trigger = 0;
+  int latest_trigger_time = 0;
 
   while (context->enable_processing) {
     if ((bytes = pa_simple_read(context->pa_input, (void *)buf, sizeof(buf), &error)) < 0) {
       daemon_log(LOG_ERR, "pa_simple_read failed: %s", pa_strerror(error));
       assert(0);
+    }
+
+    if ((time(NULL) - latest_trigger_time) < context->cooldown) {
+      continue;
     }
 
     ebur128_add_frames_short(context->ebur128_state, buf, sizeof(buf)/2);
@@ -128,9 +135,13 @@ void *audio_loop(void *context_p) {
     }
 
     if (trigger) {
+      latest_trigger_time = time(NULL);
       audio_trigger(context);
       points = 0;
       trigger = 0;
+      daemon_log(LOG_INFO,
+                 "Waiting %d seconds before listening again",
+                 context->cooldown);
     }
   }
 
@@ -229,6 +240,7 @@ int settings_init(context_t *context) {
   context->output_device = NULL;
   context->shush_filename = DEFAULT_SHUSHFILE;
   context->verbosity = DEFAULT_VERBOSITY;
+  context->cooldown = DEFAULT_COOLDOWN;
 
   config_lookup_float(&context->config, "decay", &context->decay);
   config_lookup_int(&context->config, "threshold", &context->points_threshold);
@@ -236,6 +248,7 @@ int settings_init(context_t *context) {
   config_lookup_string(&context->config, "output_device", &context->output_device);
   config_lookup_string(&context->config, "shush_file", &context->shush_filename);
   config_lookup_bool(&context->config, "verbosity", &context->verbosity);
+  config_lookup_int(&context->config, "cooldown", &context->cooldown);
 
   daemon_set_verbosity(context->verbosity);
 
@@ -246,6 +259,7 @@ int settings_init(context_t *context) {
   daemon_log(LOG_DEBUG, "\t%.20s %s", "output_device", context->output_device);
   daemon_log(LOG_DEBUG, "\t%.20s %s", "shush_file", context->shush_filename);
   daemon_log(LOG_DEBUG, "\t%.20s %d", "verbosity", context->verbosity);
+  daemon_log(LOG_DEBUG, "\t%.10s %d", "cooldown", context->cooldown);
 
   return 0;
 }

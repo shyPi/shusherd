@@ -4,5 +4,6 @@
   "min_threshold": 10,
   "max_threshold": 500,
   "shout_msg": "dwarf-laugh",
-  "poll_interval": 1
+  "poll_interval": 1,
+  "cooldown": 5
 }
