@@ -190,8 +190,7 @@ int audio_init(context_t *context) {
 
   context->enable_processing = 1;
 
-  audio_loop(context);
-  //rc = pthread_create(&context->audio_thread, NULL, audio_loop, (void *)context);
+  rc = pthread_create(&context->audio_thread, NULL, audio_loop, (void *)context);
   if (rc) {
     daemon_log(LOG_ERR, "Unable to create audio thread: %d", rc);
     goto cleanup_ebur128_state;
