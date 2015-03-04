@@ -47,14 +47,39 @@ typedef struct {
   pthread_t audio_thread;
   int enable_processing;
   pa_simple *pa_input;
-  pa_simple *pa_output;
 } context_t;
 
 void audio_trigger(context_t *context) {
+  int input_fd = -1;
+  static const pa_sample_spec ss = {
+    .format = PA_SAMPLE_S16LE,
+    .rate = 44100,
+    .channels = 1
+  };
+  int error;
+
+  daemon_log(LOG_INFO,
+             "Opening %s for output",
+             context->output_device ?: "default sink");
+
   daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
 
-  int error;
-  int input_fd = open(context->shush_filename, O_RDONLY);
+  pa_simple *pa_output = pa_simple_new(
+                              NULL,
+                              "shusherd",
+                              PA_STREAM_PLAYBACK,
+                              context->output_device,
+                              "playback",
+                              &ss,
+                              NULL,
+                              NULL,
+                              &error);
+  if (!pa_output) {
+    daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
+    goto finish;
+  }
+
+  input_fd = open(context->shush_filename, O_RDONLY);
   if (input_fd < 0) {
     fprintf(stderr, "Error reading %s: %s\n", context->shush_filename, strerror(errno));
     goto finish;
@@ -73,13 +98,13 @@ void audio_trigger(context_t *context) {
     if (r == 0)
       goto finish;
 
-    if (pa_simple_write(context->pa_output, buf, (size_t) r, &error) < 0) {
+    if (pa_simple_write(pa_output, buf, (size_t) r, &error) < 0) {
       daemon_log(LOG_ERR, "pa_simple_write() failed: %s", pa_strerror(errno));
       goto finish;
     }
   }
 
-  if (pa_simple_drain(context->pa_output, &error) < 0) {
+  if (pa_simple_drain(pa_output, &error) < 0) {
     daemon_log(LOG_ERR, "pa_simple_drain() failed: %s", pa_strerror(errno));
     goto finish;
   }
@@ -87,6 +112,8 @@ void audio_trigger(context_t *context) {
 finish:
   if (input_fd > 0)
     close(input_fd);
+  if (pa_output)
+    pa_simple_free(pa_output);
 }
 
 void *audio_loop(void *context_p) {
@@ -177,26 +204,6 @@ int audio_init(context_t *context) {
     assert(context->pa_input);
   }
 
-  daemon_log(LOG_INFO,
-             "Opening %s for output",
-             context->output_device ?: "default sink");
-
-  context->pa_output = pa_simple_new(
-                              NULL,
-                              "shusherd",
-                              PA_STREAM_PLAYBACK,
-                              context->output_device,
-                              "playback",
-                              &ss,
-                              NULL,
-                              NULL,
-                              &error);
-  if (!context->pa_output) {
-    daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
-    assert(context->pa_output);
-  }
-
-
   context->ebur128_state = ebur128_init(ss.channels, ss.rate, EBUR128_MODE_S);
   assert(context->ebur128_state);
 
@@ -220,7 +227,6 @@ void audio_destroy(context_t *context) {
   pthread_join(context->audio_thread, NULL);
   ebur128_destroy(&context->ebur128_state);
   pa_simple_free(context->pa_input);
-  pa_simple_free(context->pa_output);
 }
 
 int settings_init(context_t *context) {
