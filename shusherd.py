@@ -12,6 +12,9 @@ import requests
 SHUSHER_HELPER = './shusherd'
 SHUSHER_CONFIG = 'shusherrc'
 
+DEFAULT_MIN_THRESHOLD = 40
+DEFAULT_MAX_THRESHOLD = 120
+
 child_process = None
 
 
@@ -62,6 +65,12 @@ class Shusher(object):
         else:
             return json.load(open(self.config))
 
+    def calc_threshold(self, cfg):
+        min_threshold = cfg.get('min_threshold', DEFAULT_MIN_THRESHOLD)
+        max_threshold = cfg.get('max_threshold', DEFAULT_MAX_THRESHOLD)
+        threshold = cfg.get('sound_threshold') / 100.0
+        return int(((max_threshold - min_threshold) * threshold) + min_threshold)
+
     def write_config(self, cfg):
         print("writing a config", cfg)
         tmpcfg = SHUSHER_CONFIG + '.tmp'
@@ -69,7 +78,8 @@ class Shusher(object):
             if 'decay' in cfg:
                 f.write('decay = {:.2}\n'.format(cfg['decay']))
             if 'sound_threshold' in cfg:
-                f.write('threshold = {}\n'.format(cfg['sound_threshold']))
+                threshold = self.calc_threshold(cfg)
+                f.write('threshold = {}\n'.format(threshold))
             if 'shout_msg' in cfg:
                 f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
             if self.input_device:
