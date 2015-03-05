@@ -78,6 +78,9 @@ class Shusher(object):
             return json.load(open(self.config))
 
     def calc_threshold(self, cfg):
+        if int(cfg.get('sound_threshold')) < 0:
+            return -1
+
         min_threshold = cfg.get('min_threshold', DEFAULT_MIN_THRESHOLD)
         max_threshold = cfg.get('max_threshold', DEFAULT_MAX_THRESHOLD)
         threshold = cfg.get('sound_threshold') / 100.0

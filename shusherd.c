@@ -58,11 +58,15 @@ void audio_trigger(context_t *context) {
   };
   int error;
 
+  daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
+
+  if (context->points_threshold < 0) {
+    daemon_log(LOG_INFO, "Threshold below 0, not triggering sound");
+  }
+
   daemon_log(LOG_INFO,
              "Opening %s for output",
              context->output_device ?: "default sink");
-
-  daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
 
   pa_simple *pa_output = pa_simple_new(
                               NULL,
