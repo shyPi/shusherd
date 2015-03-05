@@ -1,3 +1,5 @@
+#!/usr/bin/python
+
 import sys
 import argparse
 from subprocess import Popen
@@ -6,14 +8,17 @@ import os
 import atexit
 import json
 import requests
+from requests.exceptions import ConnectionError
 
 # XXX: always kill process
 
 SHUSHER_HELPER = './shusherd'
 SHUSHER_CONFIG = 'shusherrc'
+CONFIG_SLEEP = 10
 
 DEFAULT_MIN_THRESHOLD = 40
 DEFAULT_MAX_THRESHOLD = 120
+DEFAULT_COOLDOWN = 60
 
 child_process = None
 
@@ -35,8 +40,11 @@ class Shusher(object):
     def run(self):
         global child_process
         config = self.get_config()
-        if not config:
-            raise Exception('Could not get initial config')
+        while not config:
+            print("Failed to get config, sleeping")
+            time.sleep(CONFIG_SLEEP)
+            config = self.get_config()
+
         self.write_config(config)
         while True:
             child_process = Popen([SHUSHER_HELPER])
@@ -54,18 +62,25 @@ class Shusher(object):
 
     def get_config(self):
         if self.host:
-            r = requests.get('http://{}/shushers/?mac_address={}'.format(
-                self.host,
-                self.mac_addr))
-            if r.status_code == 200:
-                return r.json()
-            else:
-                print("Unable to get config: " + str(r))
+            try:
+                r = requests.get('http://{}/shushers/device_config?mac_address={}'.format(
+                    self.host,
+                    self.mac_addr))
+                if r.status_code == 200:
+                    return r.json()
+                else:
+                    print("Unable to get config: " + str(r))
+                    return None
+            except ConnectionError as e:
+                print(e)
                 return None
         else:
             return json.load(open(self.config))
 
     def calc_threshold(self, cfg):
+        if int(cfg.get('sound_threshold')) < 0:
+            return -1
+
         min_threshold = cfg.get('min_threshold', DEFAULT_MIN_THRESHOLD)
         max_threshold = cfg.get('max_threshold', DEFAULT_MAX_THRESHOLD)
         threshold = cfg.get('sound_threshold') / 100.0
@@ -80,12 +95,14 @@ class Shusher(object):
             if 'sound_threshold' in cfg:
                 threshold = self.calc_threshold(cfg)
                 f.write('threshold = {}\n'.format(threshold))
-            if 'shout_msg' in cfg:
-                f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
+            if 'filename' in cfg:
+                f.write('shush_file = "{}.wav"\n'.format(cfg['filename']))
             if self.input_device:
                 f.write('input_device = "{}"\n'.format(self.input_device))
             if self.output_device:
                 f.write('output_device = "{}"\n'.format(self.output_device))
+            if 'cooldown' in cfg:
+                f.write('cooldown = {}\n'.format(cfg['cooldown']))
 
         os.rename(tmpcfg, SHUSHER_CONFIG)
 

@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 #include <sys/select.h>
+#include <sys/signal.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -27,6 +28,7 @@
 #define DEFAULT_CONFIG "shusherrc"
 #define DEFAULT_DECAY 0.20
 #define DEFAULT_THRESHOLD 40
+#define DEFAULT_COOLDOWN 60
 #define DEFAULT_SHUSHFILE "blah.wav"
 #define DEFAULT_VERBOSITY LOG_DEBUG /* This is BROKEN for anything other than LOG_DEBUG! */
 
@@ -35,6 +37,7 @@
 typedef struct {
   int verbosity;
   int points_threshold;
+  int cooldown;
   double decay;
   const char *shush_filename;
   const char *input_device;
@@ -44,14 +47,43 @@ typedef struct {
   pthread_t audio_thread;
   int enable_processing;
   pa_simple *pa_input;
-  pa_simple *pa_output;
 } context_t;
 
 void audio_trigger(context_t *context) {
+  int input_fd = -1;
+  static const pa_sample_spec ss = {
+    .format = PA_SAMPLE_S16LE,
+    .rate = 44100,
+    .channels = 1
+  };
+  int error;
+
   daemon_log(LOG_INFO, "Trigger %s", context->shush_filename);
 
-  int error;
-  int input_fd = open(context->shush_filename, O_RDONLY);
+  if (context->points_threshold < 0) {
+    daemon_log(LOG_INFO, "Threshold below 0, not triggering sound");
+  }
+
+  daemon_log(LOG_INFO,
+             "Opening %s for output",
+             context->output_device ?: "default sink");
+
+  pa_simple *pa_output = pa_simple_new(
+                              NULL,
+                              "shusherd",
+                              PA_STREAM_PLAYBACK,
+                              context->output_device,
+                              "playback",
+                              &ss,
+                              NULL,
+                              NULL,
+                              &error);
+  if (!pa_output) {
+    daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
+    goto finish;
+  }
+
+  input_fd = open(context->shush_filename, O_RDONLY);
   if (input_fd < 0) {
     fprintf(stderr, "Error reading %s: %s\n", context->shush_filename, strerror(errno));
     goto finish;
@@ -70,13 +102,13 @@ void audio_trigger(context_t *context) {
     if (r == 0)
       goto finish;
 
-    if (pa_simple_write(context->pa_output, buf, (size_t) r, &error) < 0) {
+    if (pa_simple_write(pa_output, buf, (size_t) r, &error) < 0) {
       daemon_log(LOG_ERR, "pa_simple_write() failed: %s", pa_strerror(errno));
       goto finish;
     }
   }
 
-  if (pa_simple_drain(context->pa_output, &error) < 0) {
+  if (pa_simple_drain(pa_output, &error) < 0) {
     daemon_log(LOG_ERR, "pa_simple_drain() failed: %s", pa_strerror(errno));
     goto finish;
   }
@@ -84,6 +116,8 @@ void audio_trigger(context_t *context) {
 finish:
   if (input_fd > 0)
     close(input_fd);
+  if (pa_output)
+    pa_simple_free(pa_output);
 }
 
 void *audio_loop(void *context_p) {
@@ -101,11 +135,16 @@ void *audio_loop(void *context_p) {
 
   int bytes = 0;
   int trigger = 0;
+  int latest_trigger_time = 0;
 
   while (context->enable_processing) {
     if ((bytes = pa_simple_read(context->pa_input, (void *)buf, sizeof(buf), &error)) < 0) {
       daemon_log(LOG_ERR, "pa_simple_read failed: %s", pa_strerror(error));
       assert(0);
+    }
+
+    if ((time(NULL) - latest_trigger_time) < context->cooldown) {
+      continue;
     }
 
     ebur128_add_frames_short(context->ebur128_state, buf, sizeof(buf)/2);
@@ -127,9 +166,13 @@ void *audio_loop(void *context_p) {
     }
 
     if (trigger) {
+      latest_trigger_time = time(NULL);
       audio_trigger(context);
       points = 0;
       trigger = 0;
+      daemon_log(LOG_INFO,
+                 "Waiting %d seconds before listening again",
+                 context->cooldown);
     }
   }
 
@@ -165,26 +208,6 @@ int audio_init(context_t *context) {
     assert(context->pa_input);
   }
 
-  daemon_log(LOG_INFO,
-             "Opening %s for output",
-             context->output_device ?: "default sink");
-
-  context->pa_output = pa_simple_new(
-                              NULL,
-                              "shusherd",
-                              PA_STREAM_PLAYBACK,
-                              context->output_device,
-                              "playback",
-                              &ss,
-                              NULL,
-                              NULL,
-                              &error);
-  if (!context->pa_output) {
-    daemon_log(LOG_ERR, "pa_simple_new failed: %s", pa_strerror(error));
-    assert(context->pa_output);
-  }
-
-
   context->ebur128_state = ebur128_init(ss.channels, ss.rate, EBUR128_MODE_S);
   assert(context->ebur128_state);
 
@@ -208,7 +231,6 @@ void audio_destroy(context_t *context) {
   pthread_join(context->audio_thread, NULL);
   ebur128_destroy(&context->ebur128_state);
   pa_simple_free(context->pa_input);
-  pa_simple_free(context->pa_output);
 }
 
 int settings_init(context_t *context) {
@@ -228,6 +250,7 @@ int settings_init(context_t *context) {
   context->output_device = NULL;
   context->shush_filename = DEFAULT_SHUSHFILE;
   context->verbosity = DEFAULT_VERBOSITY;
+  context->cooldown = DEFAULT_COOLDOWN;
 
   config_lookup_float(&context->config, "decay", &context->decay);
   config_lookup_int(&context->config, "threshold", &context->points_threshold);
@@ -235,6 +258,7 @@ int settings_init(context_t *context) {
   config_lookup_string(&context->config, "output_device", &context->output_device);
   config_lookup_string(&context->config, "shush_file", &context->shush_filename);
   config_lookup_bool(&context->config, "verbosity", &context->verbosity);
+  config_lookup_int(&context->config, "cooldown", &context->cooldown);
 
   daemon_set_verbosity(context->verbosity);
 
@@ -245,6 +269,7 @@ int settings_init(context_t *context) {
   daemon_log(LOG_DEBUG, "\t%.20s %s", "output_device", context->output_device);
   daemon_log(LOG_DEBUG, "\t%.20s %s", "shush_file", context->shush_filename);
   daemon_log(LOG_DEBUG, "\t%.20s %d", "verbosity", context->verbosity);
+  daemon_log(LOG_DEBUG, "\t%.10s %d", "cooldown", context->cooldown);
 
   return 0;
 }

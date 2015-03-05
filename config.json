@@ -1,8 +1,9 @@
 {
   "decay": 0.22,
   "sound_threshold": 50,
-  "min_threshold": 10,
-  "max_threshold": 500,
-  "shout_msg": "dwarf-laugh",
-  "poll_interval": 1
+  "min_threshold": 40,
+  "max_threshold": 160,
+  "filename": "dwarf-laugh",
+  "poll_interval": 1,
+  "cooldown": 15
 }
