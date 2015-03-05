@@ -63,7 +63,7 @@ class Shusher(object):
     def get_config(self):
         if self.host:
             try:
-                r = requests.get('http://{}/shushers/?mac_address={}'.format(
+                r = requests.get('http://{}/shushers/device_config?mac_address={}'.format(
                     self.host,
                     self.mac_addr))
                 if r.status_code == 200:
@@ -95,8 +95,8 @@ class Shusher(object):
             if 'sound_threshold' in cfg:
                 threshold = self.calc_threshold(cfg)
                 f.write('threshold = {}\n'.format(threshold))
-            if 'shout_msg' in cfg:
-                f.write('shush_file = "{}.wav"\n'.format(cfg['shout_msg']))
+            if 'filename' in cfg:
+                f.write('shush_file = "{}.wav"\n'.format(cfg['filename']))
             if self.input_device:
                 f.write('input_device = "{}"\n'.format(self.input_device))
             if self.output_device:
